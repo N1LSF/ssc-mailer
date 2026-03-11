@@ -1,99 +1,114 @@
 const express = require('express');
-const multer = require('multer');
-const nodemailer = require('nodemailer');
 const cors = require('cors');
+const nodemailer = require('nodemailer');
+const multer = require('multer');
+const FormData = require('form-data');
+const fetch = require('node-fetch');
 
 const app = express();
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 10 }
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 app.use(cors());
+app.use(express.json());
 
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'ssc-mailer' });
-});
+const TG_TOKEN  = process.env.TG_TOKEN;
+const TG_CHAT_ID = process.env.TG_CHAT_ID;
 
-app.post('/api/send', upload.array('files', 10), async (req, res) => {
-  try {
-    const { team_name, university, email, team_size, idea, ref_info } = req.body;
-    const files = req.files || [];
-
-    function esc(str) {
-      return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    const html = `
-      <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto">
-        <h2 style="color:#7c5cfc;border-bottom:2px solid #7c5cfc;padding-bottom:12px">
-          New Application - Student Startup Challenge
-        </h2>
-        <table style="width:100%;border-collapse:collapse;margin:20px 0">
-          <tr style="background:#f8f8fc">
-            <td style="padding:10px 14px;font-weight:600;width:160px;border:1px solid #e0e0e0">Team</td>
-            <td style="padding:10px 14px;border:1px solid #e0e0e0">${esc(team_name)}</td>
-          </tr>
-          <tr>
-            <td style="padding:10px 14px;font-weight:600;border:1px solid #e0e0e0">University</td>
-            <td style="padding:10px 14px;border:1px solid #e0e0e0">${esc(university)}</td>
-          </tr>
-          <tr style="background:#f8f8fc">
-            <td style="padding:10px 14px;font-weight:600;border:1px solid #e0e0e0">Email</td>
-            <td style="padding:10px 14px;border:1px solid #e0e0e0"><a href="mailto:${esc(email)}">${esc(email)}</a></td>
-          </tr>
-          <tr>
-            <td style="padding:10px 14px;font-weight:600;border:1px solid #e0e0e0">Team Size</td>
-            <td style="padding:10px 14px;border:1px solid #e0e0e0">${esc(team_size)}</td>
-          </tr>
-          <tr style="background:#f8f8fc">
-            <td style="padding:10px 14px;font-weight:600;border:1px solid #e0e0e0">Reference</td>
-            <td style="padding:10px 14px;border:1px solid #e0e0e0">${esc(ref_info)}</td>
-          </tr>
-        </table>
-        <h3 style="color:#333">Idea Description</h3>
-        <div style="background:#f8f8fc;padding:16px;border-radius:8px;border-left:4px solid #7c5cfc;white-space:pre-wrap;line-height:1.6">
-          ${esc(idea)}
-        </div>
-        <p style="margin-top:20px;color:#888;font-size:13px">
-          Files: ${files.length}${files.length ? ' - ' + files.map(f => f.originalname).join(', ') : ''}
-        </p>
-      </div>`;
-
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
-      auth: {
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS
-      }
-    });
-
-    await transporter.sendMail({
-      from: '"SSC Applications" <' + process.env.SMTP_USER + '>',
-      to: process.env.MAIL_TO,
-      replyTo: email,
-      subject: 'New Application: ' + (team_name || 'No name'),
-      html: html,
-      attachments: files.map(f => ({
-        filename: f.originalname,
-        content: f.buffer,
-        contentType: f.mimetype
-      }))
-    });
-
-    res.json({ success: true });
-
-  } catch (err) {
-    console.error('Send error:', err);
-    res.status(500).json({ error: err.message });
-  }
+    }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('Server running on port ' + PORT));
+// ── EMAIL с файлами ──
+app.post('/api/send', upload.array('files', 10), async (req, res) => {
+    try {
+        const { team_name, university, email, team_size, idea, ref_info } = req.body;
+
+        const attachments = (req.files || []).map(f => ({
+            filename: f.originalname,
+            content: f.buffer
+        }));
+
+        await transporter.sendMail({
+            from: process.env.SMTP_USER,
+            to: process.env.MAIL_TO,
+            subject: `Новая заявка SSC: ${team_name}`,
+            html: `
+                <h2>Новая заявка</h2>
+                <p><b>Команда:</b> ${team_name}</p>
+                <p><b>ВУЗ:</b> ${university}</p>
+                <p><b>Email:</b> ${email}</p>
+                <p><b>Размер:</b> ${team_size}</p>
+                <p><b>Идея:</b><br>${(idea || '').replace(/\n/g, '<br>')}</p>
+                <p><b>Ссылка:</b> ${ref_info || '—'}</p>
+            `,
+            attachments
+        });
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Email error:', err);
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
+// ── TELEGRAM: отправка файла (прокси) ──
+app.post('/api/send-file', upload.single('file'), async (req, res) => {
+    try {
+        const chatId = req.body.chat_id || TG_CHAT_ID;
+        const file = req.file;
+
+        if (!file) {
+            return res.status(400).json({ ok: false, description: 'No file' });
+        }
+
+        const form = new FormData();
+        form.append('chat_id', chatId);
+        form.append('document', file.buffer, {
+            filename: file.originalname,
+            contentType: file.mimetype
+        });
+
+        const tgResp = await fetch(
+            `https://api.telegram.org/bot${TG_TOKEN}/sendDocument`,
+            { method: 'POST', body: form, headers: form.getHeaders() }
+        );
+
+        res.json(await tgResp.json());
+    } catch (err) {
+        console.error('TG file error:', err);
+        res.status(500).json({ ok: false, description: err.message });
+    }
+});
+
+// ── TELEGRAM: отправка текста (прокси) ──
+app.post('/api/send-text', async (req, res) => {
+    try {
+        const { chat_id, text, parse_mode } = req.body;
+
+        const tgResp = await fetch(
+            `https://api.telegram.org/bot${TG_TOKEN}/sendMessage`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: chat_id || TG_CHAT_ID,
+                    text,
+                    parse_mode: parse_mode || 'Markdown',
+                    disable_web_page_preview: true
+                })
+            }
+        );
+
+        res.json(await tgResp.json());
+    } catch (err) {
+        console.error('TG text error:', err);
+        res.status(500).json({ ok: false, description: err.message });
+    }
+});
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
