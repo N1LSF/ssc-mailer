@@ -42,7 +42,7 @@ app.post('/api/send', upload.array('files', 10), async (req, res) => {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                from: 'SSC Mailer <onboarding@resend.dev>',
+                from: 'SSC Mailer <noreply@student-startup-challenge.site>',
                 to: [MAIL_TO],
                 subject: `Новая заявка SSC: ${team_name}`,
                 html: htmlBody,
