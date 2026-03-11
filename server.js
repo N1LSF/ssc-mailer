@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
 const multer = require('multer');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
@@ -11,51 +10,61 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 
 app.use(cors());
 app.use(express.json());
 
-const TG_TOKEN  = process.env.TG_TOKEN;
+const TG_TOKEN   = process.env.TG_TOKEN;
 const TG_CHAT_ID = process.env.TG_CHAT_ID;
+const RESEND_KEY = process.env.RESEND_KEY;
+const MAIL_TO    = process.env.MAIL_TO;
 
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS
-    }
-});
-
-// ── EMAIL с файлами ──
+// ── EMAIL через Resend API ──
 app.post('/api/send', upload.array('files', 10), async (req, res) => {
     try {
         const { team_name, university, email, team_size, idea, ref_info } = req.body;
 
         const attachments = (req.files || []).map(f => ({
             filename: f.originalname,
-            content: f.buffer
+            content: f.buffer.toString('base64')
         }));
 
-        await transporter.sendMail({
-            from: process.env.SMTP_USER,
-            to: process.env.MAIL_TO,
-            subject: `Новая заявка SSC: ${team_name}`,
-            html: `
-                <h2>Новая заявка</h2>
-                <p><b>Команда:</b> ${team_name}</p>
-                <p><b>ВУЗ:</b> ${university}</p>
-                <p><b>Email:</b> ${email}</p>
-                <p><b>Размер:</b> ${team_size}</p>
-                <p><b>Идея:</b><br>${(idea || '').replace(/\n/g, '<br>')}</p>
-                <p><b>Ссылка:</b> ${ref_info || '—'}</p>
-            `,
-            attachments
+        const htmlBody = `
+            <h2>🔥 Новая заявка SSC</h2>
+            <p><b>Команда:</b> ${team_name}</p>
+            <p><b>ВУЗ:</b> ${university}</p>
+            <p><b>Email:</b> ${email}</p>
+            <p><b>Размер:</b> ${team_size}</p>
+            <p><b>Идея:</b><br>${(idea || '').replace(/\n/g, '<br>')}</p>
+            <p><b>Ссылка:</b> ${ref_info || '—'}</p>
+        `;
+
+        const emailResp = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${RESEND_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                from: 'SSC Mailer <onboarding@resend.dev>',
+                to: [MAIL_TO],
+                subject: `Новая заявка SSC: ${team_name}`,
+                html: htmlBody,
+                attachments: attachments
+            })
         });
 
-        res.json({ ok: true });
+        const emailData = await emailResp.json();
+
+        if (emailResp.ok) {
+            res.json({ ok: true, id: emailData.id });
+        } else {
+            console.error('Resend error:', emailData);
+            res.status(500).json({ ok: false, error: emailData });
+        }
     } catch (err) {
         console.error('Email error:', err);
         res.status(500).json({ ok: false, error: err.message });
     }
 });
 
-// ── TELEGRAM: отправка файла (прокси) ──
+// ── TELEGRAM: файл (прокси) ──
 app.post('/api/send-file', upload.single('file'), async (req, res) => {
     try {
         const chatId = req.body.chat_id || TG_CHAT_ID;
@@ -84,7 +93,7 @@ app.post('/api/send-file', upload.single('file'), async (req, res) => {
     }
 });
 
-// ── TELEGRAM: отправка текста (прокси) ──
+// ── TELEGRAM: текст (прокси) ──
 app.post('/api/send-text', async (req, res) => {
     try {
         const { chat_id, text, parse_mode } = req.body;
